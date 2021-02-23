@@ -1,12 +1,102 @@
+apiVersion: kappctrl.k14s.io/v1alpha1
+kind: App
+metadata:
+  name: -postcreate
+  namespace: workload-clusters
+  annotations:
+    kapp.k14s.io/change-group: gitops.tanzu.vmware.com/cni
+    kapp.k14s.io/change-rule: upsert before upserting gitops.tanzu.vmware.com/kapp-controller
+spec:
+  cluster:
+    namespace: kube-system
+    kubeconfigSecretRef:
+      name: -kubeconfig
+      key: value
+  fetch:
+  - inline:
+      pathsFrom:
+      - secretRef:
+          name: -postcreate
+  template:
+  - ytt:
+      ignoreUnknownComments: true
+  deploy:
+  - kapp: {}
+---
+apiVersion: kappctrl.k14s.io/v1alpha1
+kind: App
+metadata:
+  name: -kapp-controller
+  namespace: workload-clusters
+  annotations:
+    kapp.k14s.io/change-group: gitops.tanzu.vmware.com/kapp-controller
+    kapp.k14s.io/change-rule.1: delete before deleting gitops.tanzu.vmware.com/cni
+spec:
+  cluster:
+    namespace: kube-system
+    kubeconfigSecretRef:
+      name: -kubeconfig
+      key: value
+  fetch:
+  - git:
+      url: https://github.com/voor/cluster-api-gitops
+      ref: origin/default
+      subPath: management-cluster/deploy/kapp-controller/manifests
+      secretRef:
+        name: management-git-secret
+  template:
+  - ytt:
+      ignoreUnknownComments: true
+      inline:
+        paths:
+          clusteradmin-values.yaml: |
+            #@data/values
+            ---
+            clusteradminrole: true
+        pathsFrom:
+        - secretRef:
+            name: workload-clusters-secrets
+  deploy:
+  - kapp: {}
+---
+apiVersion: kappctrl.k14s.io/v1alpha1
+kind: App
+metadata:
+  name: -apps
+  namespace: workload-clusters
+  annotations:
+    kapp.k14s.io/change-group: gitops.tanzu.vmware.com/remote-apps
+    kapp.k14s.io/change-rule.1: delete before deleting gitops.tanzu.vmware.com/kapp-controller
+    kapp.k14s.io/change-rule.2: upsert after upserting gitops.tanzu.vmware.com/kapp-controller
+    kapp.k14s.io/disable-wait: "true"
+spec:
+  cluster:
+    namespace: kapp-controller
+    kubeconfigSecretRef:
+      name: -kubeconfig
+      key: value
+  fetch:
+  - git:
+      url: https://github.com/voor/cluster-api-gitops
+      ref: origin/default
+      subPath: workload/deploy
+      secretRef:
+        name: management-git-secret
+  template:
+  - ytt:
+      ignoreUnknownComments: true
+  deploy:
+  - kapp: {}
+---
 apiVersion: cluster.x-k8s.io/v1alpha3
 kind: Cluster
 metadata:
   annotations:
     tkg/plan: dev
   labels:
-    tkg.tanzu.vmware.com/cluster-name: hello-world
-  name: hello-world
-  namespace: default
+    tkg.tanzu.vmware.com/cluster-name: snake
+  name: snake
+  namespace: workload-clusters
 spec:
   clusterNetwork:
     pods:
@@ -18,55 +108,22 @@ spec:
   controlPlaneRef:
     apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
     kind: KubeadmControlPlane
-    name: hello-world-control-plane
+    name: snake-control-plane
   infrastructureRef:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha3
     kind: AWSCluster
-    name: hello-world
----
-apiVersion: infrastructure.cluster.x-k8s.io/v1alpha3
-kind: AWSCluster
-metadata:
-  name: hello-world
-  namespace: default
-spec:
-  bastion:
-    enabled: true
-  networkSpec:
-    cni:
-      cniIngressRules:
-      - description: antrea1
-        fromPort: 10349
-        protocol: tcp
-        toPort: 10349
-      - description: genev
-        fromPort: 6081
-        protocol: udp
-        toPort: 6081
-    subnets:
-    - availabilityZone: us-east-1b
-      cidrBlock: 10.0.0.0/24
-      id: ""
-      isPublic: true
-    - availabilityZone: us-east-1b
-      cidrBlock: 10.0.1.0/24
-      id: ""
-    vpc:
-      cidrBlock: 10.0.0.0/16
-      id: ""
-  region: us-east-1
-  sshKeyName: tkg-us-east-1-20210223
+    name: snake
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
 kind: KubeadmControlPlane
 metadata:
-  name: hello-world-control-plane
-  namespace: default
+  name: snake-control-plane
+  namespace: workload-clusters
 spec:
   infrastructureTemplate:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha3
     kind: AWSMachineTemplate
-    name: hello-world-control-plane
+    name: snake-control-plane
   kubeadmConfigSpec:
     clusterConfiguration:
       apiServer:
@@ -74,6 +131,8 @@ spec:
           cloud-provider: aws
           tls-cipher-suites: TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_RSA_WITH_AES_256_GCM_SHA384
         timeoutForControlPlane: 8m0s
+        certSANs:
+        - .cluster.tanzu.world
       controllerManager:
         extraArgs:
           cloud-provider: aws
@@ -112,8 +171,8 @@ spec:
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha3
 kind: AWSMachineTemplate
 metadata:
-  name: hello-world-control-plane
-  namespace: default
+  name: snake-control-plane
+  namespace: workload-clusters
 spec:
   template:
     spec:
@@ -128,8 +187,8 @@ spec:
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha3
 kind: AWSMachineTemplate
 metadata:
-  name: hello-world-md-0
-  namespace: default
+  name: snake-md-0
+  namespace: workload-clusters
 spec:
   template:
     spec:
@@ -144,8 +203,8 @@ spec:
 apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
 kind: KubeadmConfigTemplate
 metadata:
-  name: hello-world-md-0
-  namespace: default
+  name: snake-md-0
+  namespace: workload-clusters
 spec:
   template:
     spec:
@@ -160,29 +219,30 @@ spec:
 apiVersion: cluster.x-k8s.io/v1alpha3
 kind: MachineDeployment
 metadata:
-  name: hello-world-md-0
-  namespace: default
+  name: snake-md-0
+  namespace: workload-clusters
 spec:
-  clusterName: hello-world
+  clusterName: snake
   replicas: 1
   selector:
-    matchLabels: null
+    matchLabels:
+      node-pool: -worker-pool
   template:
     metadata:
       labels:
-        node-pool: hello-world-worker-pool
+        node-pool: snake-worker-pool
     spec:
       bootstrap:
         configRef:
           apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
           kind: KubeadmConfigTemplate
-          name: hello-world-md-0
-      clusterName: hello-world
-      failureDomain: us-east-1b
+          name: snake-md-0
+      clusterName: snake
+      failureDomain: us-east-1c
       infrastructureRef:
         apiVersion: infrastructure.cluster.x-k8s.io/v1alpha3
         kind: AWSMachineTemplate
-        name: hello-world-md-0
+        name: snake-md-0
       version: v1.19.3+vmware.1
 ---
 apiVersion: addons.cluster.x-k8s.io/v1alpha3
@@ -191,16 +251,16 @@ metadata:
   annotations:
     tkg.tanzu.vmware.com/addon-type: cni/antrea
   labels:
-    cluster.x-k8s.io/cluster-name: hello-world
-  name: hello-world-cni-antrea
-  namespace: default
+    cluster.x-k8s.io/cluster-name: snake
+  name: snake-cni-antrea
+  namespace: workload-clusters
 spec:
   clusterSelector:
     matchLabels:
-      tkg.tanzu.vmware.com/cluster-name: hello-world
+      tkg.tanzu.vmware.com/cluster-name: snake
   resources:
   - kind: Secret
-    name: hello-world-antrea
+    name: snake-antrea
   strategy: ApplyOnce
 ---
 apiVersion: v1
@@ -208,8 +268,8 @@ kind: Secret
 metadata:
   annotations:
     tkg.tanzu.vmware.com/addon-type: cni/antrea
-  name: hello-world-antrea
-  namespace: default
+  name: snake-antrea
+  namespace: workload-clusters
 stringData:
   value: |
     apiVersion: apiextensions.k8s.io/v1beta1
@@ -1302,8 +1362,8 @@ kind: Secret
 metadata:
   annotations:
     tkg.tanzu.vmware.com/addon-type: metadata/tkg
-  name: hello-world-tkg-metadata-namespace-role
-  namespace: default
+  name: snake-tkg-metadata-namespace-role
+  namespace: workload-clusters
 stringData:
   value: |
     apiVersion: v1
@@ -1349,8 +1409,8 @@ kind: Secret
 metadata:
   annotations:
     tkg.tanzu.vmware.com/addon-type: metadata/tkg
-  name: hello-world-tkg-metadata-configmap
-  namespace: default
+  name: snake-tkg-metadata-configmap
+  namespace: workload-clusters
 stringData:
   value: |
     apiVersion: v1
@@ -1361,7 +1421,7 @@ stringData:
     data:
       metadata.yaml: |
         cluster:
-          name: hello-world
+          name: snake
           type: workload
           plan: dev
           kubernetesProvider: VMware Tanzu Kubernetes Grid
@@ -1378,8 +1438,8 @@ kind: Secret
 metadata:
   annotations:
     tkg.tanzu.vmware.com/addon-type: metadata/tkg
-  name: hello-world-tkg-metadata-bom-configmap
-  namespace: default
+  name: snake-tkg-metadata-bom-configmap
+  namespace: workload-clusters
 stringData:
   value: |
     apiVersion: v1
@@ -1852,33 +1912,33 @@ metadata:
   annotations:
     tkg.tanzu.vmware.com/addon-type: metadata/tkg
   labels:
-    cluster.x-k8s.io/cluster-name: hello-world
-  name: hello-world-tkg-metadata
-  namespace: default
+    cluster.x-k8s.io/cluster-name: snake
+  name: snake-tkg-metadata
+  namespace: workload-clusters
 spec:
   clusterSelector:
     matchLabels:
-      tkg.tanzu.vmware.com/cluster-name: hello-world
+      tkg.tanzu.vmware.com/cluster-name: snake
   resources:
   - kind: Secret
-    name: hello-world-tkg-metadata-namespace-role
+    name: snake-tkg-metadata-namespace-role
   - kind: Secret
-    name: hello-world-tkg-metadata-configmap
+    name: snake-tkg-metadata-configmap
   - kind: Secret
-    name: hello-world-tkg-metadata-bom-configmap
+    name: snake-tkg-metadata-bom-configmap
   strategy: ApplyOnce
 ---
 apiVersion: cluster.x-k8s.io/v1alpha3
 kind: MachineHealthCheck
 metadata:
-  name: hello-world
-  namespace: default
+  name: snake
+  namespace: workload-clusters
 spec:
-  clusterName: hello-world
+  clusterName: snake
   nodeStartupTimeout: 20m
   selector:
     matchLabels:
-      node-pool: hello-world-worker-pool
+      node-pool: snake-worker-pool
   unhealthyConditions:
   - status: Unknown
     timeout: 5m
@@ -1891,23 +1951,23 @@ apiVersion: addons.cluster.x-k8s.io/v1alpha3
 kind: ClusterResourceSet
 metadata:
   labels:
-    cluster.x-k8s.io/cluster-name: hello-world
-  name: hello-world-default-storage-class
-  namespace: default
+    cluster.x-k8s.io/cluster-name: snake
+  name: snake-default-storage-class
+  namespace: workload-clusters
 spec:
   clusterSelector:
     matchLabels:
-      tkg.tanzu.vmware.com/cluster-name: hello-world
+      tkg.tanzu.vmware.com/cluster-name: snake
   resources:
   - kind: Secret
-    name: hello-world-default-storage-class
+    name: snake-default-storage-class
   strategy: ApplyOnce
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: hello-world-default-storage-class
-  namespace: default
+  name: snake-default-storage-class
+  namespace: workload-clusters
 stringData:
   value: |
     kind: StorageClass
